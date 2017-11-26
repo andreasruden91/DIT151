@@ -47,7 +47,7 @@ int main(void)
     gameobject_set_speed(&ball, 4, 1);
     
 #ifndef SIMULATOR
-    lcd_clear_force();
+    lcd_clear();
 #endif
     
     while (1)

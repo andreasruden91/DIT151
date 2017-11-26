@@ -49,7 +49,7 @@ int main(void)
     ball = make_gameobject_raw(1, 1, 4, 4, 12, ballGeometry);
     
 #ifndef SIMULATOR
-    lcd_clear_force();
+    lcd_clear();
 #endif
     
     while (1)
