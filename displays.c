@@ -162,23 +162,13 @@ void ascii_write_char(char c)
 #define LCD_CMD_SET_PAGE (0x80|0x20|0x10|8)
 #define LCD_CMD_SET_START_ADDR (0x80|0x40)
 
-// Display is 128x64; a byte in the buffer represents 8 vertical pixels
-// XXX: We should probably have some dynamic memory so that applications
-// not making use of an LCD display need not resever 1 KiB of memory
-static unsigned char lcd_buffer[128][8];
-// Each bit signifies one byte-row in the Y-axis; with LSB being Y=0, and MSB Y=7
-// If that group of 8 pixels need to be repainted it's 1, otherwise 0
-static unsigned char lcd_updatemask[128];
-
 // Busily (spin) wait for LCD to finish its operation
 static void lcd_busy_wait(unsigned char cs)
 {
     unsigned char data;
     
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = 0; // Clear CTRL bit; E=0, SELECT=0 esp.
-    
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = 0; // Clear CTRL bit; E=0, SELECT=0, RS=0 esp.
     *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555; // Hi byte input, lo byte output
-    
     *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = CTRL_RW | cs; // RW=1, ChipSelect
     delay_500ns();
     
@@ -222,6 +212,8 @@ static void _lcd_write(unsigned char dataByte, unsigned char cs, int rs)
     *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_CS_BOTH; // CS1=0,CS2=0
 }
 
+static void _lcd_updatemask_write(int draw);
+
 static void lcd_write(unsigned char dataByte, unsigned char cs)
 {
     _lcd_write(dataByte, cs, 1);
@@ -236,8 +228,8 @@ void lcd_init(void)
 {
     *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
     *((volatile unsigned long*)(GPIO_E + GPIO_OTYPER)) = 0;
-    *((volatile unsigned long*)(GPIO_E + GPIO_OSPEEDR)) = 0x55555555;
-    *((volatile unsigned long*)(GPIO_E + GPIO_PUPDR)) = 0x55550000;
+    *((volatile unsigned long*)(GPIO_E + GPIO_OSPEEDR)) = 0x55555555; /* medium speed */
+    *((volatile unsigned long*)(GPIO_E + GPIO_PUPDR)) = 0x55550000; /* inputs are pull up */
     
     *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = CTRL_E; // E=1
     delay_micro(10);
@@ -257,60 +249,89 @@ void lcd_clear(void)
 {
     for (int y = 0; y < 8; ++y)
     {
+        lcd_command(LCD_CMD_SET_ADDR | 0, CTRL_CS_BOTH);
         lcd_command(LCD_CMD_SET_PAGE | y, CTRL_CS_BOTH);
+        
         for (int x = 0; x < 64; ++x)
         {
-            lcd_buffer[x][y] = 0;
-            lcd_buffer[x+64][y] = 0;
-            if (y == 0)
-                lcd_updatemask[x] = 0;
-                
             lcd_write(0, CTRL_CS_BOTH); // NOTE: This write increases LCD's X by one
         }
     }
 }
 
-void lcd_draw(int x, int y)
+static unsigned char _lcd_read(int addr, int page)
 {
+    int cs;
+    unsigned char data;
+    
+    cs = (addr < 64) ? CTRL_CS1 : CTRL_CS2;
+    
+    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555; // Hi byte input, lo byte output
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= cs; // ChipSelect
+    
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_RS | CTRL_RW; // RS=1, RW=1
+    delay_500ns();
+
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
+    delay_500ns();
+    
+    data = *((volatile unsigned char*)(GPIO_E + GPIO_IDR + 1));
+    
+    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
+    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555; // Restore all to output
+    
+    lcd_busy_wait(cs);
+
+    return data;
+}
+
+static unsigned char lcd_read(int addr, int page)
+{
+    // By the specs of the LCD: you need to do two reads to get the actual value;
+    // the first one being a dummy read
+    
+    int cs;
+    
+    cs = (addr < 64) ? CTRL_CS1 : CTRL_CS2;
+    
+    lcd_command(LCD_CMD_SET_ADDR | (addr%64), cs);
+    lcd_command(LCD_CMD_SET_PAGE | page, cs);
+    
+    _lcd_read(addr, page);
+    return _lcd_read(addr, page);
+}
+
+static void _lcd_pixel(int x, int y, int draw)
+{
+    int cs;
+    unsigned char byte, bi;
+    
     if (!(0 <= x && x < 128) || !(0 <= y && y < 64))
         return;
+   
+    cs = (x < 64) ? CTRL_CS1 : CTRL_CS2;
         
-    if (lcd_buffer[x][y/8] & (1 << (y%8)))
-        return; // Pixel already turned on
+    bi = 1 << (y % 8);
+    byte = lcd_read(x, y / 8); // This updates page to what we want (but not addr)
     
-    lcd_buffer[x][y/8] |= 1 << (y%8); // Mark pixel as turned on
-    lcd_updatemask[x] |= 1 << (y/8); // Mark byte as needing to paint
+    if ((byte & bi) == (draw ? 0 : bi))
+    {
+        if (draw)
+            byte |= bi; // add our pixel
+        else
+            byte &= ~bi; // remove our pixel
+        lcd_command(LCD_CMD_SET_ADDR | (x%64), cs);
+        lcd_write(byte, cs);
+    }
+}
+
+void lcd_draw(int x, int y)
+{
+    _lcd_pixel(x, y, 1);
 }
 
 void lcd_erase(int x, int y)
 {
-    if (!(0 <= x && x < 128) || !(0 <= y && y < 64))
-        return;
-        
-    if (!(lcd_buffer[x][y/8] & (1 << (y%8))))
-        return; // Pixel already turned off
-    
-    lcd_buffer[x][y/8] &= ~(1 << (y%8)); // Mark pixel as turned on
-    lcd_updatemask[x] |= 1 << (y/8); // Mark byte as needing to paint
-}
-
-void lcd_present(void)
-{
-    int cs = 0;
-    for (int y = 0; y < 8; ++y)
-    {
-        lcd_command(LCD_CMD_SET_PAGE | y, CTRL_CS_BOTH);
-        for (int x = 0; x < 128; ++x)
-        {
-            unsigned char um = lcd_updatemask[x];
-            if ((lcd_updatemask[x] & (1 << y)) == 0)
-                continue; // Need not update this byte
-            
-            cs = (x < 64) ? CTRL_CS1 : CTRL_CS2;
-            
-            lcd_command(LCD_CMD_SET_ADDR | x, cs);
-            lcd_command(LCD_CMD_SET_PAGE | y, cs);
-            lcd_write(lcd_buffer[x][y], cs);
-        }
-    }
+    _lcd_pixel(x, y, 0);
 }

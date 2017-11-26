@@ -2,30 +2,50 @@
  * 	startup.c
  *
  */
+ 
+ #include "displays.h"
+
 void startup(void) __attribute__((naked)) __attribute__((section (".start_section")) );
 
 void startup ( void )
 {
 __asm volatile(
-	" LDR R0,=0x2001C000\n"		/* set stack */
-	" MOV SP,R0\n"
-	" BL main\n"				/* call main */
-	"_exit: B .\n"				/* never return */
-	) ;
+    " LDR R0,=0x2001C000\n"		/* set stack */
+    " MOV SP,R0\n"
+    " BL main\n"				/* call main */
+    "_exit: B .\n"				/* never return */
+    ) ;
 }
 
-void app_init(void)
+void init_app(void)
 {
-    *((unsigned long*)0x40020C00) = 0x00005555; // Port D MODE Register; set low byte as output
+#ifdef USBDM
+    /* starta klockor port D och E */
+    *((unsigned long*)0x40023830) = 0x18;
+    /* initiera PLL */
+    __asm volatile("LDR R0, =0x08000209\n BLX R0 \n")
+#endif
+
+    ascii_init();
 }
 
 void main(void)
 {
-    unsigned char c;
-    app_init();
-    while (1)
-    {
-        c = (unsigned char) *((unsigned short*)0x40021010); // Get low byte from Port E's input register
-        *((unsigned char*)0x40020C14) = c;                  // Write to port D's output register
-    }
+    const char* s;
+    const char* test1 = "Alfanumerisk ";
+    const char* test2 = "Display - test";
+    
+    init_app();
+    
+    ascii_gotoxy(0, 0);
+    s = test1;
+    while (*s)
+        ascii_write_char(*s++);
+        
+    ascii_gotoxy(0, 1);
+    s = test2;
+    while (*s)
+        ascii_write_char(*s++);
+
+    return 0;
 }

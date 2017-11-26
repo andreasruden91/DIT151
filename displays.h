@@ -23,12 +23,13 @@ void ascii_write_char(char c);
 void lcd_init(void);
 
 // The buffer of the LCD is cleared; preparing it for a drawing cycle
+// Only the pixels that were 1 last frame are cleared
 void lcd_clear(void);
 
-// Mark a pixel as needing to be drawn; takes effect on lcd_present()
+// Draw a pixel on the screen
 void lcd_draw(int x, int y);
 
-// Write changes set up by lcd_clear() and lcd_draw() to the LCD screen
-void lcd_present(void);
+// Erase a pixel on the screen
+void lcd_erase(int x, int y);
 
 #endif
