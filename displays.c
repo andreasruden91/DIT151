@@ -37,27 +37,27 @@ static unsigned char ascii_read(int rs);
 
 static void ascii_write_controller(unsigned char c)
 {
-    *port_E_odr |= (CTRL_SELECT | CTRL_E);
-    *port_E_odr_hi = c;
-    *port_E_odr &= ~CTRL_E;
+    *portE_odr_lo |= (CTRL_SELECT | CTRL_E);
+    *portE_odr_hi = c;
+    *portE_odr_lo &= ~CTRL_E;
     delay_250ns();
 }
 
 static unsigned char ascii_read_controller(void)
 {
     unsigned char c;
-    *port_E_odr |= (CTRL_SELECT | CTRL_E);
+    *portE_odr_lo |= (CTRL_SELECT | CTRL_E);
     delay_250ns(); /* min 360ns */
     delay_250ns();
-    c = *port_E_odr_hi;
-    *port_E_odr &= ~CTRL_E;
+    c = *portE_odr_hi;
+    *portE_odr_lo &= ~CTRL_E;
     return c;
 }
 
 static void ascii_write_cmd(unsigned char cmd)
 {
     // Rs=0, RW=0
-    *port_E_odr &= ~(CTRL_RS | CTRL_RW);
+    *portE_odr_lo &= ~(CTRL_RS | CTRL_RW);
     
     ascii_write_controller(cmd);
 }
@@ -65,8 +65,8 @@ static void ascii_write_cmd(unsigned char cmd)
 static void ascii_write_data(unsigned char data)
 {
     // Rs=1, RW=0
-    *port_E_odr &= ~CTRL_RW;
-    *port_E_odr |= CTRL_RS;
+    *portE_odr_lo &= ~CTRL_RW;
+    *portE_odr_lo |= CTRL_RS;
     
     ascii_write_controller(data);
 }
@@ -76,16 +76,16 @@ static unsigned char ascii_read_status(void)
     unsigned char rv;
     
     // Temporarily mark GPIO E hi as input
-    *port_E_moder = 0x00005555;
+    *portE_moder = 0x00005555;
     
     // RS=0, RW=1
-    *port_E_odr &= ~CTRL_RS;
-    *port_E_odr |= CTRL_RW;
+    *portE_odr_lo &= ~CTRL_RS;
+    *portE_odr_lo |= CTRL_RW;
     
-    rv = *port_E_odr_hi;
+    rv = *portE_odr_hi;
     
     // Restore GPIO E hi as output
-    *port_E_moder = 0x55555555;
+    *portE_moder = 0x55555555;
     
     return rv;
 }
@@ -95,15 +95,15 @@ static unsigned char ascii_read_data(void)
     unsigned char rv;
     
     // Temporarily mark GPIO E hi as input
-    *port_E_moder = 0x00005555;
+    *portE_moder = 0x00005555;
     
     // RS=1, RW=1
-    *port_E_odr |= (CTRL_RW | CTRL_RS);
+    *portE_odr_lo |= (CTRL_RW | CTRL_RS);
     
-    rv = *port_E_odr_hi;
+    rv = *portE_odr_hi;
     
     // Restore GPIO E hi as output
-    *port_E_moder = 0x55555555;
+    *portE_moder = 0x55555555;
     
     return rv;
 }
@@ -118,7 +118,7 @@ static void ascii_command(unsigned char cmd, int usDelay)
 
 void ascii_init(void)
 {
-    *port_E_moder = 0x55555555;
+    *portE_moder = 0x55555555;
     
     // Function Set: 2 rows, 5x11 point size
     ascii_command(0x20 | 0x10 | 0x8 | 0x4, 39);
@@ -164,12 +164,12 @@ void ascii_write_char(char c)
 
 static void graphic_ctrl_bit_set(unsigned char c)
 {
-	*port_E_odr |= c;
+	*portE_odr_lo |= c;
 }
 
 static void graphic_ctrl_bit_clear(unsigned char c)
 {
-	*port_E_odr &= ~c;
+	*portE_odr_lo &= ~c;
 }
 
 static void select_controller(unsigned char cs)
@@ -201,7 +201,7 @@ static void graphic_wait_ready()
     unsigned char data;
 
     graphic_ctrl_bit_clear(CTRL_E);
-    *port_E_moder = 0x00005555; // Hi byte input, lo byte output
+    *portE_moder = 0x00005555; // Hi byte input, lo byte output
 	graphic_ctrl_bit_clear(CTRL_RS);
     graphic_ctrl_bit_set(CTRL_RW);
     delay_500ns();
@@ -211,7 +211,7 @@ static void graphic_wait_ready()
         graphic_ctrl_bit_set(CTRL_E);
         delay_500ns();
         
-        data = *port_E_idr_hi;
+        data = *portE_idr_hi;
             
         graphic_ctrl_bit_clear(CTRL_E);
         delay_500ns();
@@ -222,30 +222,30 @@ static void graphic_wait_ready()
     }
     
     graphic_ctrl_bit_set(CTRL_E);
-	*port_E_moder = 0x55555555;
+	*portE_moder = 0x55555555;
 }
 
 static void _lcd_write(unsigned char dataByte, unsigned char cs, int rs)
 {
     // Setup control register
 	// graphic_write_data/command
-	*port_E_odr &= ~CTRL_E; // E=0
+	*portE_odr_lo &= ~CTRL_E; // E=0
 	select_controller(cs);
 	if (rs)
-		*port_E_odr |= CTRL_RS;
+		*portE_odr_lo |= CTRL_RS;
 	else
-		*port_E_odr &= ~CTRL_RS;
-	*port_E_odr &= ~CTRL_RW; // rw=0
+		*portE_odr_lo &= ~CTRL_RS;
+	*portE_odr_lo &= ~CTRL_RW; // rw=0
 	// graphic write
-	*port_E_odr_hi = dataByte;
+	*portE_odr_hi = dataByte;
 	select_controller(cs);
     
     // Write data
-    //*port_E_odr_hi = dataByte;
+    //*portE_odr_hi = dataByte;
     delay_500ns();
-    *port_E_odr |= CTRL_E; // E=1
+    *portE_odr_lo |= CTRL_E; // E=1
     delay_500ns();
-    *port_E_odr &= ~CTRL_E; // E=0
+    *portE_odr_lo &= ~CTRL_E; // E=0
     
     // Wait for write to complete
     if (cs & B_CS1)
@@ -253,9 +253,9 @@ static void _lcd_write(unsigned char dataByte, unsigned char cs, int rs)
     if (cs & B_CS2)
         graphic_wait_ready(B_CS2);
     
-    *port_E_odr_hi = 0;   // data = 0
-    *port_E_odr |= CTRL_E; // E=1
-    *port_E_odr &= ~CTRL_CS_BOTH; // CS1=0,CS2=0
+    *portE_odr_hi = 0;   // data = 0
+    *portE_odr_lo |= CTRL_E; // E=1
+    *portE_odr_lo &= ~CTRL_CS_BOTH; // CS1=0,CS2=0
 }
 
 void lcd_write(unsigned char dataByte, unsigned char cs)
@@ -270,18 +270,18 @@ void lcd_command(unsigned char cmd, unsigned char cs)
 
 void lcd_init(void)
 {
-    *port_E_moder = 0x55555555;
-    *port_E_otyper = 0;
-    *port_E_ospeedr = 0x55555555; /* medium speed */
-    *port_E_pupdr = 0x55550000; /* inputs are pull up */
+    *portE_moder = 0x55555555;
+    *portE_otyper = 0;
+    *portE_ospeedr = 0x55555555; /* medium speed */
+    *portE_pupdr = 0x55550000; /* inputs are pull up */
     
-	*port_E_odr &= ~CTRL_SELECT;
+	*portE_odr_lo &= ~CTRL_SELECT;
 	
-    *port_E_odr |= CTRL_E; // E=1
+    *portE_odr_lo |= CTRL_E; // E=1
     delay_micro(10);
-    *port_E_odr &= ~(CTRL_CS_BOTH|CTRL_RESET|CTRL_E);
+    *portE_odr_lo &= ~(CTRL_CS_BOTH|CTRL_RESET|CTRL_E);
     delay_milli(30);
-    *port_E_odr |= CTRL_RESET;
+    *portE_odr_lo |= CTRL_RESET;
     
     lcd_command(LCD_CMD_OFF, CTRL_CS_BOTH);
     lcd_command(LCD_CMD_ON, CTRL_CS_BOTH);
@@ -310,7 +310,7 @@ static unsigned char graphic_read(unsigned char cs)
     unsigned char data;
     
 	graphic_ctrl_bit_clear(CTRL_E);
-    *port_E_moder = 0x00005555; // Hi byte input, lo byte output
+    *portE_moder = 0x00005555; // Hi byte input, lo byte output
     
 	graphic_ctrl_bit_set(CTRL_RS);
 	graphic_ctrl_bit_set(CTRL_RW);
@@ -320,10 +320,10 @@ static unsigned char graphic_read(unsigned char cs)
     graphic_ctrl_bit_set(CTRL_E);
     delay_500ns();
     
-    data = *port_E_idr_hi;
+    data = *portE_idr_hi;
     
     graphic_ctrl_bit_clear(CTRL_E);
-    *port_E_moder = 0x55555555; // Restore all to output
+    *portE_moder = 0x55555555; // Restore all to output
     
     if (cs & B_CS1)
         graphic_wait_ready(B_CS1);

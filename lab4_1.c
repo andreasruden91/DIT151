@@ -24,15 +24,15 @@ int delay_count = 0;
 
 void delay_250ns_irq(void)
 {
-    *((volatile unsigned long*)SysTick_CTRL) = 0;
-    *((volatile unsigned long*)SysTick_LOAD) = 42-1;
-    *((volatile unsigned long*)SysTick_VAL) = 0;
-    *((volatile unsigned long*)SysTick_CTRL) = 7;
+    *SysTick_CTRL = 0;
+    *SysTick_LOAD = DELAY_250NS_CYCLES;
+    *SysTick_VAL = 0;
+    *SysTick_CTRL = 7;
 }
 
 void systick_irq_handler(void)
 {
-    *((volatile unsigned long*)SysTick_CTRL) = 0;
+    *SysTick_CTRL = 0;
     if (--delay_count > 0)
         delay_250ns_irq();
     else
@@ -53,14 +53,14 @@ void init_app(void)
 {
 #ifdef USBDM
     /* starta klockor port D och E */
-    *((volatile unsigned long*)0x40023830) = 0x18;
+    *((volatile unsigned long*) 0x40023830) = 0x18;
     /* initiera PLL */
     __asm volatile("LDR R0, =0x08000209\n BLX R0 \n")
     /* relokera vektortabell */
     *((volatile unsigned long*) 0xE000ED08) = 0x2001C000;
 #endif
     /* initiera port D */
-    *((volatile unsigned long*)(GPIO_D+GPIO_MODER)) = 0x00005555;
+    *portD_moder = 0x00005555;
     
     /* initiera undantagsvektor */
     *((void (**)(void)) 0x2001C03C) = systick_irq_handler;
@@ -71,13 +71,13 @@ int main(void)
     init_app();
     
     delay(DELAY_COUNT);
-    *((volatile unsigned char*)(GPIO_D+GPIO_ODR)) = 0xFF;
+    *portD_odr_lo = 0xFF;
     while(1)
     {
         if (systick_flag)
             break;
     }
-    *((volatile unsigned char*)(GPIO_D+GPIO_ODR)) = 0;
+    *portD_odr_lo = 0;
     
     return 0;
 }

@@ -2,6 +2,9 @@
  * 	startup.c
  *
  */
+
+#include "defines.h"
+ 
 void startup(void) __attribute__((naked)) __attribute__((section (".start_section")) );
 
 void startup ( void )
@@ -18,11 +21,11 @@ unsigned char count = 0;
 
 void flipflop_interrupt_handler(void)
 {
-    unsigned long data = *((volatile unsigned long*) (0x40013C14));
+    unsigned long data = *EXTI_PR;
     if (data & 8)
     {
         ++count;
-        *((volatile unsigned long*) (0x40013C14)) |= 8;
+        *EXTI_PR |= 8;
     }
 }
 
@@ -38,22 +41,22 @@ void init_app(void)
 #endif
 
     // Setup GPIO-D as output
-    *((volatile unsigned long*) 0x40020C00) = 0x55555555;
+    *portD_moder = 0x55555555;
     // Connect PE3 to interrupt line EXTI3
-    *((volatile unsigned long*) (0x40013808)) &= ~0xF000;
-    *((volatile unsigned long*) (0x40013808)) |= 0x4000;
+    *SYSCFG_EXTICR1 &= ~0xF000;
+    *SYSCFG_EXTICR1 |= 0x4000;
     
     // Setup EXTI3 to generate interrupts
-    *((volatile unsigned long*) (0x40013C00)) |= 8;
+    *EXTI_IMR |= 8;
     // Set EXTI3 to generate interupts at falling edge
-    *((volatile unsigned long*) (0x40013C0C)) |= 8;
-    *((volatile unsigned long*) (0x40013C08)) &= ~8;
+    *EXTI_FTSR |= 8;
+    *EXTI_RTSR &= ~8;
     
     // Setup interrupt vector
     *((void (**)(void)) 0x2001C064) = flipflop_interrupt_handler;
     
     // Setup NVIC
-    *((volatile unsigned long*) 0xE000E100) |= 1 << 9;
+    *NVIC_ISER0 |= 1 << 9;
 }
 
 void main(void)
@@ -61,6 +64,6 @@ void main(void)
     init_app();
     while (1)
     {
-        *((volatile unsigned char*) 0x40020C14) = count;
+        *portD_odr_lo = count;
     }
 }
