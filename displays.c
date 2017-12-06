@@ -37,27 +37,27 @@ static unsigned char ascii_read(int rs);
 
 static void ascii_write_controller(unsigned char c)
 {
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= (CTRL_SELECT | CTRL_E);
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1)) = c;
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E;
+    *port_E_odr |= (CTRL_SELECT | CTRL_E);
+    *port_E_odr_hi = c;
+    *port_E_odr &= ~CTRL_E;
     delay_250ns();
 }
 
 static unsigned char ascii_read_controller(void)
 {
     unsigned char c;
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= (CTRL_SELECT | CTRL_E);
+    *port_E_odr |= (CTRL_SELECT | CTRL_E);
     delay_250ns(); /* min 360ns */
     delay_250ns();
-    c = *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1));
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E;
+    c = *port_E_odr_hi;
+    *port_E_odr &= ~CTRL_E;
     return c;
 }
 
 static void ascii_write_cmd(unsigned char cmd)
 {
     // Rs=0, RW=0
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~(CTRL_RS | CTRL_RW);
+    *port_E_odr &= ~(CTRL_RS | CTRL_RW);
     
     ascii_write_controller(cmd);
 }
@@ -65,8 +65,8 @@ static void ascii_write_cmd(unsigned char cmd)
 static void ascii_write_data(unsigned char data)
 {
     // Rs=1, RW=0
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_RW;
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_RS;
+    *port_E_odr &= ~CTRL_RW;
+    *port_E_odr |= CTRL_RS;
     
     ascii_write_controller(data);
 }
@@ -76,16 +76,16 @@ static unsigned char ascii_read_status(void)
     unsigned char rv;
     
     // Temporarily mark GPIO E hi as input
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555;
+    *port_E_moder = 0x00005555;
     
     // RS=0, RW=1
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_RS;
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_RW;
+    *port_E_odr &= ~CTRL_RS;
+    *port_E_odr |= CTRL_RW;
     
-    rv = *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1));
+    rv = *port_E_odr_hi;
     
     // Restore GPIO E hi as output
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
+    *port_E_moder = 0x55555555;
     
     return rv;
 }
@@ -95,15 +95,15 @@ static unsigned char ascii_read_data(void)
     unsigned char rv;
     
     // Temporarily mark GPIO E hi as input
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555;
+    *port_E_moder = 0x00005555;
     
     // RS=1, RW=1
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= (CTRL_RW | CTRL_RS);
+    *port_E_odr |= (CTRL_RW | CTRL_RS);
     
-    rv = *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1));
+    rv = *port_E_odr_hi;
     
     // Restore GPIO E hi as output
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
+    *port_E_moder = 0x55555555;
     
     return rv;
 }
@@ -118,7 +118,7 @@ static void ascii_command(unsigned char cmd, int usDelay)
 
 void ascii_init(void)
 {
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
+    *port_E_moder = 0x55555555;
     
     // Function Set: 2 rows, 5x11 point size
     ascii_command(0x20 | 0x10 | 0x8 | 0x4, 39);
@@ -152,97 +152,143 @@ void ascii_write_char(char c)
     delay_micro(43);
 }
 
-#define CTRL_CS1 (8)
-#define CTRL_CS2 (0x10)
+#define B_CS1 (8)
+#define B_CS2 (0x10)
 #define CTRL_RESET (0x20)
-#define CTRL_CS_BOTH (CTRL_CS1|CTRL_CS2)
-#define LCD_CMD_ON (0x20|0x10|8|4|2|1)
-#define LCD_CMD_OFF (0x20|0x10|8|4|2)
-#define LCD_CMD_SET_ADDR (0x40)
-#define LCD_CMD_SET_PAGE (0x80|0x20|0x10|8)
-#define LCD_CMD_SET_START_ADDR (0x80|0x40)
+#define CTRL_CS_BOTH (B_CS1|B_CS2)
+#define LCD_CMD_ON 0x3F
+#define LCD_CMD_OFF 0x3E
+#define LCD_CMD_SET_ADDR 0x40
+#define LCD_CMD_SET_PAGE 0xB8
+#define LCD_CMD_SET_START_ADDR 0xC0
+
+static void graphic_ctrl_bit_set(unsigned char c)
+{
+	*port_E_odr |= c;
+}
+
+static void graphic_ctrl_bit_clear(unsigned char c)
+{
+	*port_E_odr &= ~c;
+}
+
+static void select_controller(unsigned char cs)
+{
+	switch (cs)
+	{
+		case 0:
+			graphic_ctrl_bit_clear(B_CS1);
+			graphic_ctrl_bit_clear(B_CS2);
+			break;
+		case B_CS1:
+			graphic_ctrl_bit_set(B_CS1);
+			graphic_ctrl_bit_clear(B_CS2);
+			break;
+		case B_CS2:
+			graphic_ctrl_bit_clear(B_CS1);
+			graphic_ctrl_bit_set(B_CS2);
+			break;
+		case (B_CS1|B_CS2):
+			graphic_ctrl_bit_set(B_CS1);
+			graphic_ctrl_bit_set(B_CS2);
+			break;
+	}
+}
 
 // Busily (spin) wait for LCD to finish its operation
-static void lcd_busy_wait(unsigned char cs)
+static void graphic_wait_ready()
 {
     unsigned char data;
-    
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = 0; // Clear CTRL bit; E=0, SELECT=0, RS=0 esp.
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555; // Hi byte input, lo byte output
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = CTRL_RW | cs; // RW=1, ChipSelect
+
+    graphic_ctrl_bit_clear(CTRL_E);
+    *port_E_moder = 0x00005555; // Hi byte input, lo byte output
+	graphic_ctrl_bit_clear(CTRL_RS);
+    graphic_ctrl_bit_set(CTRL_RW);
     delay_500ns();
     
     while (1)
     {
-        *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
+        graphic_ctrl_bit_set(CTRL_E);
         delay_500ns();
         
-        data = *((volatile unsigned char*)(GPIO_E + GPIO_IDR + 1));
-        if ((data & 0x80) == 0)
-            break;
+        data = *port_E_idr_hi;
             
-        *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
+        graphic_ctrl_bit_clear(CTRL_E);
         delay_500ns();
+		
+		data = 0;
+		if ((data & 0x80) == 0)
+            break;
     }
     
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
+    graphic_ctrl_bit_set(CTRL_E);
+	*port_E_moder = 0x55555555;
 }
 
 static void _lcd_write(unsigned char dataByte, unsigned char cs, int rs)
 {
     // Setup control register
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = cs | (rs ? CTRL_RS : 0); // RS=rs, ChipSelect, SELECT=0, RW=0, etc
+	// graphic_write_data/command
+	*port_E_odr &= ~CTRL_E; // E=0
+	select_controller(cs);
+	if (rs)
+		*port_E_odr |= CTRL_RS;
+	else
+		*port_E_odr &= ~CTRL_RS;
+	*port_E_odr &= ~CTRL_RW; // rw=0
+	// graphic write
+	*port_E_odr_hi = dataByte;
+	select_controller(cs);
     
     // Write data
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1)) = dataByte;
+    //*port_E_odr_hi = dataByte;
     delay_500ns();
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
+    *port_E_odr |= CTRL_E; // E=1
     delay_500ns();
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
+    *port_E_odr &= ~CTRL_E; // E=0
     
     // Wait for write to complete
-    if (cs & CTRL_CS1)
-        lcd_busy_wait(CTRL_CS1);
-    if (cs & CTRL_CS2)
-        lcd_busy_wait(CTRL_CS2);
+    if (cs & B_CS1)
+        graphic_wait_ready(B_CS1);
+    if (cs & B_CS2)
+        graphic_wait_ready(B_CS2);
     
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR + 1)) = 0;   // data = 0
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_CS_BOTH; // CS1=0,CS2=0
+    *port_E_odr_hi = 0;   // data = 0
+    *port_E_odr |= CTRL_E; // E=1
+    *port_E_odr &= ~CTRL_CS_BOTH; // CS1=0,CS2=0
 }
 
-static void _lcd_updatemask_write(int draw);
-
-static void lcd_write(unsigned char dataByte, unsigned char cs)
+void lcd_write(unsigned char dataByte, unsigned char cs)
 {
     _lcd_write(dataByte, cs, 1);
 }
 
-static void lcd_command(unsigned char cmd, unsigned char cs)
+void lcd_command(unsigned char cmd, unsigned char cs)
 {
     _lcd_write(cmd, cs, 0);
 }
 
 void lcd_init(void)
 {
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555;
-    *((volatile unsigned long*)(GPIO_E + GPIO_OTYPER)) = 0;
-    *((volatile unsigned long*)(GPIO_E + GPIO_OSPEEDR)) = 0x55555555; /* medium speed */
-    *((volatile unsigned long*)(GPIO_E + GPIO_PUPDR)) = 0x55550000; /* inputs are pull up */
+    *port_E_moder = 0x55555555;
+    *port_E_otyper = 0;
+    *port_E_ospeedr = 0x55555555; /* medium speed */
+    *port_E_pupdr = 0x55550000; /* inputs are pull up */
     
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = CTRL_E; // E=1
+	*port_E_odr &= ~CTRL_SELECT;
+	
+    *port_E_odr |= CTRL_E; // E=1
     delay_micro(10);
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = 0;
+    *port_E_odr &= ~(CTRL_CS_BOTH|CTRL_RESET|CTRL_E);
     delay_milli(30);
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) = CTRL_RESET;
-    delay_milli(100);
+    *port_E_odr |= CTRL_RESET;
     
     lcd_command(LCD_CMD_OFF, CTRL_CS_BOTH);
     lcd_command(LCD_CMD_ON, CTRL_CS_BOTH);
     lcd_command(LCD_CMD_SET_START_ADDR | 0, CTRL_CS_BOTH);
     lcd_command(LCD_CMD_SET_ADDR | 0, CTRL_CS_BOTH);
     lcd_command(LCD_CMD_SET_PAGE | 0, CTRL_CS_BOTH);
+	select_controller(0);
 }
 
 void lcd_clear(void)
@@ -259,47 +305,40 @@ void lcd_clear(void)
     }
 }
 
-static unsigned char _lcd_read(int addr, int page)
+static unsigned char graphic_read(unsigned char cs)
 {
-    int cs;
     unsigned char data;
     
-    cs = (addr < 64) ? CTRL_CS1 : CTRL_CS2;
+	graphic_ctrl_bit_clear(CTRL_E);
+    *port_E_moder = 0x00005555; // Hi byte input, lo byte output
     
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x00005555; // Hi byte input, lo byte output
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= cs; // ChipSelect
-    
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_RS | CTRL_RW; // RS=1, RW=1
+	graphic_ctrl_bit_set(CTRL_RS);
+	graphic_ctrl_bit_set(CTRL_RW);
+	select_controller(cs);
     delay_500ns();
 
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) |= CTRL_E; // E=1
+    graphic_ctrl_bit_set(CTRL_E);
     delay_500ns();
     
-    data = *((volatile unsigned char*)(GPIO_E + GPIO_IDR + 1));
+    data = *port_E_idr_hi;
     
-    *((volatile unsigned char*)(GPIO_E + GPIO_ODR)) &= ~CTRL_E; // E=0
-    *((volatile unsigned long*)(GPIO_E + GPIO_MODER)) = 0x55555555; // Restore all to output
+    graphic_ctrl_bit_clear(CTRL_E);
+    *port_E_moder = 0x55555555; // Restore all to output
     
-    lcd_busy_wait(cs);
+    if (cs & B_CS1)
+        graphic_wait_ready(B_CS1);
+    if (cs & B_CS2)
+        graphic_wait_ready(B_CS2);
 
     return data;
 }
 
-static unsigned char lcd_read(int addr, int page)
+static unsigned char lcd_read(unsigned char cs)
 {
     // By the specs of the LCD: you need to do two reads to get the actual value;
     // the first one being a dummy read
-    
-    int cs;
-    
-    cs = (addr < 64) ? CTRL_CS1 : CTRL_CS2;
-    
-    lcd_command(LCD_CMD_SET_ADDR | (addr%64), cs);
-    lcd_command(LCD_CMD_SET_PAGE | page, cs);
-    
-    _lcd_read(addr, page);
-    return _lcd_read(addr, page);
+    graphic_read(cs);
+    return graphic_read(cs);
 }
 
 static void _lcd_pixel(int x, int y, int draw)
@@ -307,23 +346,26 @@ static void _lcd_pixel(int x, int y, int draw)
     int cs;
     unsigned char byte, bi;
     
-    if (!(0 <= x && x < 128) || !(0 <= y && y < 64))
+    if ((!(0 <= x && x < 128)) || (!(0 <= y && y < 64)))
         return;
    
-    cs = (x < 64) ? CTRL_CS1 : CTRL_CS2;
+    cs = (x < 64) ? B_CS1 : B_CS2;
         
     bi = 1 << (y % 8);
-    byte = lcd_read(x, y / 8); // This updates page to what we want (but not addr)
-    
-    if ((byte & bi) == (draw ? 0 : bi))
-    {
-        if (draw)
-            byte |= bi; // add our pixel
-        else
-            byte &= ~bi; // remove our pixel
-        lcd_command(LCD_CMD_SET_ADDR | (x%64), cs);
-        lcd_write(byte, cs);
-    }
+	
+	lcd_command(LCD_CMD_SET_ADDR | (x%64), cs);
+    lcd_command(LCD_CMD_SET_PAGE | (y/8), cs);
+    byte = lcd_read(cs); // This updates page to what we want (but not addr)
+	lcd_command(LCD_CMD_SET_ADDR | (x%64), cs);
+
+	if (draw)
+		byte |= bi; // add our pixel
+	else
+		byte &= ~bi; // remove our pixel
+	
+	lcd_write(byte, cs);
+	lcd_command(LCD_CMD_ON, CTRL_CS_BOTH);
+    lcd_command(LCD_CMD_SET_START_ADDR | 0, CTRL_CS_BOTH);
 }
 
 void lcd_draw(int x, int y)
